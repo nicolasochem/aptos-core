@@ -1,5 +1,5 @@
 ---
-title: "Signing a transaction"
+title: "Creating a Signed Transaction"
 slug: "creating-a-signed-transaction"
 sidebar_position: 1
 ---
@@ -7,40 +7,64 @@ sidebar_position: 1
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Creating a signed transaction
+# Creating a Signed Transaction
 
-All transactions exceuted on Aptos blockchain need to be signed, which is a requirement enforced by the chain for security reasons. Before submiting transactions, clients need to hash transactions into bytes and sign the bytes with the account private key (see [account basics][account] for how account and private key works). This guide will walk you through how to create signed transactions.
+All transactions executed on the Aptos Blockchain must be signed. This requirement is enforced by the chain for security reasons. 
+
+You can use the [Aptos REST API](https://fullnode.devnet.aptoslabs.com/spec.html) for this purpose. The Aptos server will generate the signing message, the transaction signature and will submit the signed transaction to the Aptos Blockchain. Also see the tutorial [Your First Transaction](../tutorials/first-transaction.md).
+
+However, you may prefer instead that your client application, for example, a hardware security module (HSM), be responsible for generating the signed transaction. Before submitting transactions, a client must:
+
+- Hash the transactions into bytes, and 
+- Sign the bytes with the account private key. See [Accounts][account] for how account and private key works. 
+
+This guide will introduce the concepts behind constructing a transaction, generating the appropriate message to sign, and various methods for signing within Aptos.
 
 :::info
-Code examples below are provided in typescript.
+Code examples below are provided in Typescript.
 :::
 
 ## Overview
 
-Creating a transaction that is ready to be executed can be split into four steps:
-* Preparing the unsigned transaction, known as a `RawTransaction`
-* Generating the appropriate salt for signing the transaction
-* Signing this salt and the transaction to produce an `Authenticator`
-* Deriving a complete and signed transaction, consisting of an  `Authenticator` and a `RawTransaction`
+Creating a transaction that is ready to be executed requires the following four steps:
 
-Unsigned transactions are known as `RawTransaction`s and contain all the information about how to execute an operation on an account within Aptos but lack the appropriate authorization given via a signature or `Authenticator`. In Aptos, all data is encoded as Binary Canonical Serialization or [BCS][bcs]. Aptos supports many different approaches to signing but defaults to a single signers using [Ed25519][Ed25519]. The `Authenticator` produced during signing gives authorization to the blockchain to execute the transaction on behalf of the account owner.
-## Key Concepts
+* Prepare the unsigned transaction, known as a `RawTransaction`.
+* Generate the appropriate salt for signing the transaction.
+* Sign this salt and the transaction to produce an `Authenticator`, and
+* Derive a complete and signed transaction, consisting of an  `Authenticator` and a `RawTransaction`.
+
+See the below diagram showing a high-level flow.
+
+![creating-signed-transaction.svg](/img/docs/creating-signed-transaction.svg)
+
+Unsigned transactions are known as `RawTransaction`s. They contain all the information about how to execute an operation on an account within Aptos. But they lack the appropriate authorization with a signature or `Authenticator`. 
+
+In Aptos Blockchain, all the data is encoded as [BCS][bcs] (Binary Canonical Serialization). Aptos supports many different approaches to signing but defaults to a single signer using [Ed25519][Ed25519]. The `Authenticator` produced during the signing gives authorization to the Aptos Blockchain to execute the transaction on behalf of the account owner.
+
+## Key concepts
 
 ### Raw transaction
+
 Raw transactions consist of the following fields:
-* **sender** Account address of the sender
-* **sequence_number**(uint64) Sequence number of this transaction. This must match the sequence number stored in the sender's account at the time the transaction executes.
-* **payload** Instructions for the Aptos blockchain including publishing a module, execute a script function, or execute a script payload.
-* **max_gas_amount**(uint64) Maximum total gas to spend for this transaction. The account must have more than this gas or the transaction will be discarded during validation.
-* **gas_unit_price**(uint64) Price to be paid per gas unit. During execution, `total_gas_amount = txn_base_cost * gas_unit_price`. total_gas_amount must not exceed max_gas_amount or the txn will abort during execution.
-* **expiration_timestamp_secs**(uint64) The blockchain timestamp at which the blockchain would either discard this transaction.
-* **chain_id**(uint8) The chain id of the blockchain that this transaction is intended to be run on.
+
+* **sender** Account address of the sender.
+* **sequence_number** (uint64): Sequence number of this transaction. This must match the sequence number stored in the sender's account at the time the transaction executes.
+* **payload**: Instructions for the Aptos Blockchain, including publishing a module, execute a script function or execute a script payload.
+* **max_gas_amount** (uint64): Maximum total gas to spend for this transaction. The account must have more than this gas or the transaction will be discarded during validation.
+* **txn_base_cost**: Represents the total units of gas consumed when executing the transaction.
+* **gas_unit_price** (uint64): Price to be paid per gas unit. During execution the `total_gas_amount`, calculated as: `total_gas_amount = txn_base_cost * gas_unit_price`, must not exceed `max_gas_amount` or the transaction will abort during the execution.
+* **expiration_timestamp_secs** (uint64): The blockchain timestamp at which the blockchain would discard this transaction.
+* **chain_id** (uint8): The chain ID of the blockchain that this transaction is intended to be run on.
 
 ### BCS
-Binary Canonical Serialization (BCS) is a serialization format. The design goals of BCS include:
-* provide good performance and concise (binary) representations
-* enforce canonical serialization, meaning that every value of a given type should have a single valid representation.
-* support a wide range of data types, including booleans, integers, strings, lists, maps and user-defined structs, etc. Note: floats, unicode chars and sets are not supported.
+
+Binary Canonical Serialization (BCS) is a serialization format. See [BCS][bcs] for a description of the design goals of BCS.
+
+:::note 
+
+BCS does not support floats, unicode chars and sets.
+
+:::
 
 BCS is not a self-describing format. As such, in order to deserialize a message, one must know the message type and layout ahead of time.
 
@@ -51,12 +75,14 @@ const bytes: Unint8Array = bcs_serialize_string("aptos");
 assert(bytes == [5, 0x61, 0x70, 0x74, 0x6F, 0x73]);
 ```
 
-See [BCS][bcs] for more details.
-
 ### Signing message
-A signing message is basically the bytes of the BCS serialized raw transaction. There is also a prefix, which is sha3_256("APTOS::RawTransaction"). Therefore, signing_message = prefix_bytes + bcs_bytes_of_raw_transaction.
 
-Below code shows how prefix bytes are calculated.
+A signing message is the bytes of the BCS serialized raw transaction. There is also a prefix, `prefix_bytes`, which is `sha3_256("APTOS::RawTransaction")`. Therefore:
+
+`signing_message = prefix_bytes + bcs_bytes_of_raw_transaction.`
+
+The below code shows how prefix bytes are calculated.
+
 ```typescript
 function signinMessagePrefix(): Buffer {
   let hash = SHA3.sha3_256.create();
@@ -66,26 +92,31 @@ function signinMessagePrefix(): Buffer {
 ```
 
 ### Signature
-A signature is the [Ed25519][ed25519] encryption of a signing message with client private key. The signature is mainly used for security purpose.
-* By signing a signing message with private key, clients prove to the Aptos chain that they have authorized the transaction be executed.
-* Aptos chain will validate the signature with client account's public key to ensure that the transaction submitted is indeed signed by the client.
+A signature is the [Ed25519][ed25519] encryption of a signing message with the client private key. The signature is mainly used for security purpose.
+
+* By signing a signing message with the private key, clients prove to the Aptos Blockchain that they have authorized the transaction be executed.
+* Aptos Blockchain will validate the signature with client account's public key to ensure that the transaction submitted is indeed signed by the client.
 
 ### Signed transaction
-A signed transaction is consisted of: a raw transaction and an authenticator. An authenticator contains a client's public key and the signature of the raw transaction.
 
-After BCS serialization and hex-coding, signed transactions are ready for submission the REST interface.
+A signed transaction consisted of: 
 
-## Detailed Steps
+- A raw transaction, and 
+- An authenticator. The authenticator contains a client's public key and the signature of the raw transaction.
 
-1. Create a RawTransaction
-2. Create a signing message
-3. Sign the signing message with account private key
-4. Create a SignedTransaction
-5. Serialize SignedTransaction into bytes with BCS, and then hex-encode the bytes into a string
+After BCS serialization and hex-coding, signed transactions are ready for submission to the [Aptos REST interface](https://fullnode.devnet.aptoslabs.com/spec.html).
 
-## Step 1) Create a RawTransaction
+## Detailed steps
 
-The example assumes the transaction has a script function payload.
+1. Create a RawTransaction.
+2. Create a signing message.
+3. Sign the signing message with account private key.
+4. Create a SignedTransaction.
+5. Serialize SignedTransaction into bytes with BCS, and then hex-encode the bytes into a string.
+
+### Step 1. Create a RawTransaction
+
+The below example assumes the transaction has a script function payload.
 
 ```typescript
 
@@ -139,11 +170,11 @@ function createRawTransaction(): RawTransaction {
 
 ```
 
-## Step 2) Create a signing message
+### Step 2. Create a signing message
 
-1. [SHA3_256][sha3] hash bytes of string "APTOS::RawTransaction"
-2. Bytes of BCS serialized RawTransaction
-3. Concat the prefix and BCS bytes
+1. [SHA3_256][sha3] hash bytes of string `APTOS::RawTransaction`.
+2. Bytes of BCS serialized RawTransaction.
+3. Concat the prefix and BCS bytes.
 
 ```typescript
 
@@ -170,9 +201,9 @@ function hashRawTransaction(txn: RawTransaction): Buffer {
 
 ```
 
-## Step 3) Sign the signing message with your account private key
+### Step 3. Sign the signing message 
 
-Sign the hashed raw transaction bytes with [Ed25519][ed25519]
+Sign the signing message with account private key. Shown below is the code that signs the hashed raw transaction bytes with [Ed25519][ed25519].
 
 ```typescript
 import * as Nacl from "tweetnacl";
@@ -181,7 +212,7 @@ const rawTxn = createRawTransaction();
 const signature = Nacl.sign(hashRawTransaction(rawTxn), ACCOUNT_PRIVATE_KEY);
 ```
 
-## Step 4) Create a SignedTransaction
+### Step 4. Create a SignedTransaction
 
 ```typescript
 interface Authenticator {
@@ -205,8 +236,9 @@ const signedTransaction: SignedTransaction = {
 };
 ```
 
+### Step 5. Serialize SignedTransaction 
 
-## Step 5) Serialize SignedTransaction into bytes with BCS, and then hex-encode the bytes into a string.
+Serialize SignedTransaction into bytes with BCS, and then hex-encode the bytes into a string.
 
 ```typescript
 
@@ -214,8 +246,11 @@ const signedTransactionPayload = bcsSerializeSignedTransaction(signedTransaction
 
 ```
 
-## Submit txn with required content-type
-To submit a signed transaction in BCS format, rest client needs to pass in a specific header
+## Submit transaction 
+
+Finally, submit the transaction with the required header "Content-Type".
+
+To submit a signed transaction in the BCS format, the client must pass in a specific header, as shown in the below example:
 
 ```
 curl -X POST -H "Content-Type: application/x.aptos.signed_transaction+bcs" -d 'HEX_CODE_OF_SIGNED_TXN' https://some_domain/transactions
